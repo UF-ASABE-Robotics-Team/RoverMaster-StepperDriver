@@ -1,105 +1,76 @@
-#include "board_pinout.h"
+// Author: Yuxuan Zhang
+
 #include <Arduino.h>
-#include <Servo.h>
 
-Servo tilt_servo;
+#include "board_pinout.h"
+#include "global.h"
+#include "parser.h"
+#include "servo.h"
+#include "stepper.h"
 
-int isJoint1AtLimit() {
-  int result = 0;
-  if (digitalRead(PIN_J1_SW1))
-    result += 1;
-  if (digitalRead(PIN_J1_SW2))
-    result += 2;
-  return result;
-}
+void enable() { digitalWrite(PIN_STEPPER_ENABLE, LOW); }
 
-int home(int pin_dir, int pin_step, int pin_sw, int dir, double speed = 50.0,
-         int back = 500) {
-  if (speed < 0) {
-    dir = !dir;
-    speed = -speed;
-  }
-  int d = max(round(1000000 / (100 * speed)) / 2, 1);
-  int steps = 0;
-  // Forward until switch is triggerred
-  digitalWrite(pin_dir, dir);
-  while (digitalRead(pin_sw)) {
-    digitalWrite(pin_step, HIGH);
-    delayMicroseconds(d);
-    digitalWrite(pin_step, LOW);
-    delayMicroseconds(d);
-    steps++;
-  }
-  // Backward for a few steps
-  digitalWrite(pin_dir, !dir);
-  for (int i = 0; i < back; i++) {
-    digitalWrite(pin_step, HIGH);
-    delayMicroseconds(d);
-    digitalWrite(pin_step, LOW);
-    delayMicroseconds(d);
-    steps--;
-  }
-  // Slowly move forward until switch is triggerred
-  d *= 8;
-  digitalWrite(pin_dir, dir);
-  while (digitalRead(pin_sw)) {
-    digitalWrite(pin_step, HIGH);
-    delayMicroseconds(d);
-    digitalWrite(pin_step, LOW);
-    delayMicroseconds(d);
-    steps++;
-  }
-  return steps;
-}
+void disable() { digitalWrite(PIN_STEPPER_ENABLE, HIGH); }
 
-void move(int pin_dir, int pin_step, int dir, int steps, double speed = 1.0) {
-  if (speed < 0) {
-    dir = !dir;
-    speed = -speed;
-  }
-  int d = max(round(1000000 / (100 * speed)) / 2, 1);
-  digitalWrite(pin_dir, dir);
-  for (; steps > 0; steps--) {
-    digitalWrite(pin_step, HIGH);
-    delayMicroseconds(d);
-    digitalWrite(pin_step, LOW);
-    delayMicroseconds(d);
-  }
-}
+double speed = 120.0;
+struct {
+  double j1, j2;
+} move_dst = {0, 0};
 
 int main() {
-  // Initialize Arduino
   init();
-  // Initialize pins
+  Serial.begin(115200);
   pinMode(PIN_STEPPER_ENABLE, OUTPUT);
-  pinMode(PIN_J1_DIR, OUTPUT);
-  pinMode(PIN_J1_STEP, OUTPUT);
-  pinMode(PIN_J1_SW1, INPUT_PULLUP);
-  pinMode(PIN_J1_SW2, INPUT_PULLUP);
-  tilt_servo.attach(PIN_J2_SERVO);
-  // Activate servo
-  tilt_servo.write(90);
-  delay(100);
-  for (int a = 90; a <= 135; a++) {
-    tilt_servo.write(a);
-    delay(10);
+  stepper::Motor j1("J1", {PIN_J1_DIR, PIN_J1_STEP, PIN_J1_SW1, PIN_J1_SW2});
+  servo::Motor j2("J2", PIN_J2_SERVO, {600, 1655, 2600, 180.0});
+  disable();
+  int parser_ret;
+  while (1) {
+    j1.uTask();
+    j2.uTask();
+    if ((parser_ret = parser::uTask())) {
+      // New command available
+      if (strcmp(parser::command.cmd, "HOME") == 0) {
+        if (strcmp(parser::command.arg, j1.name) == 0) {
+          j1.home(speed);
+        } else {
+          printf("ERROR Parsing Command HOME: Unknown Joint");
+        }
+      } else if (strcmp(parser::command.cmd, "MOVE") == 0) {
+        if (parser_ret & parser::state::UPDATE && parser::command.val[0] != 0) {
+          double val = strtod(parser::command.val, NULL);
+          if (strcmp(parser::command.arg, j1.name) == 0) {
+            move_dst.j1 = val;
+          } else if (strcmp(parser::command.arg, j2.name) == 0) {
+            move_dst.j2 = val;
+          } else {
+            printf("ERROR Parsing Command MOVE: Unknown Joint");
+          }
+        }
+        if (parser_ret & parser::state::COMMIT) {
+          const double m1 = abs(move_dst.j1 - j1.pos.cur),
+                       m2 = abs(move_dst.j2 - j2.pos.cur),
+                       max_move = max(m1, m2);
+          if (max_move > 0) {
+            double s;
+            s = speed * m1 / max_move;
+            j1.move(move_dst.j1, s);
+            s = speed * m2 / max_move;
+            j2.move(move_dst.j2, s);
+          }
+        }
+      } else if (strcmp(parser::command.cmd, "SPEED") == 0) {
+        speed = atof(parser::command.arg);
+      } else if (strcmp(parser::command.cmd, "ENABLE") == 0) {
+        enable();
+        j2.enable();
+      } else if (strcmp(parser::command.cmd, "DISABLE") == 0) {
+        disable();
+        j2.disable();
+      } else {
+        printf("ERROR Unknown Command");
+      }
+    }
   }
-  for (int a = 135; a >= 0; a--) {
-    tilt_servo.write(a);
-    delay(10);
-  }
-  for (int a = 0; a <= 90; a++) {
-    tilt_servo.write(a);
-    delay(10);
-  }
-  // Enable stepper driver
-  home(PIN_J1_DIR, PIN_J1_STEP, PIN_J1_SW1, HIGH);
-  // Home reverse direction
-  int range = home(PIN_J1_DIR, PIN_J1_STEP, PIN_J1_SW2, LOW);
-  // Move to neutral
-  move(PIN_J1_DIR, PIN_J1_STEP, HIGH, range / 2, 50);
-  // Stop the stepper driver
-  digitalWrite(PIN_STEPPER_ENABLE, HIGH);
-  // Dead loop
-  while (1);
+  return 0;
 }

@@ -116,6 +116,8 @@ bool Motor::step() {
       pos.cur -= delta;
     // Update time stamp
     u_stamp += step_interval;
+    // Signal the motion
+    global::sig_motion = true;
     // Reset step pin to LOW, t_step_low >= 100ns
     // Should be enough for the motor to detect the step
     // delayMicroseconds(1);

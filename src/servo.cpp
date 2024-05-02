@@ -12,17 +12,19 @@ bool Motor::step() {
   const double dt = (double)(us - u_stamp) * 1e-6;
   const double dx = dt * speed;
   u_stamp = us;
-  bool move = false;
+  bool flag = false;
   if (pos.cur != pos.dst) {
     if (abs(pos.cur - pos.dst) < dx) {
       pos.cur = pos.dst;
     } else {
       pos.cur += sgn(pos.dst - pos.cur) * dx;
     }
-    move = true;
+    // Signal the motion
+    global::sig_motion = true;
+    flag = true;
   }
   servo.writeMicroseconds(range.neutral + round(pos.cur / delta));
-  return move;
+  return flag;
 }
 
 Motor::Motor(const char *name, const int pin, const servo_range range)

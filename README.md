@@ -1,10 +1,4 @@
-# FoveaCam Controller Firmware
-
-### References
-
-+ Mirrorcle MEMS Data Sheet: [A5L3.3(C2)-6400AU](https://www.mirrorcletech.com/pdf/DS/MirrorcleTech_Datasheet_A5L3.3(C2)-6400AU.pdf)
-
-+ MEMS Driver IC Reference: [AD5264R](https://www.analog.com/media/en/technical-documentation/data-sheets/AD5624R_5644R_5664R.pdf)
+# RoverMaster StepperController Firmware
 
 ### Useful Commands
 

@@ -1,14 +1,18 @@
 // =============================================================================
-// Arduino Nano Stepper Controller Physical Connections
+// Components Onboard
 // =============================================================================
 // License: MIT
 // Author: Yuxuan Zhang (zhangyuxuan@ufl.edu)
 // =============================================================================
 #pragma once
-#include <pins_arduino.h>
+#include <global.h>
+#include <stepper.h>
+#include <Vector.h>
 
-// Shared enable pin for all steppers
-#define PIN_STEPPER_ENABLE D8
+namespace Components {
 
-// Joint 2 Servo Pin
-#define PIN_J2_SERVO 13
+extern const Vector<Stepper::Motor *> steppers;
+
+void init();
+
+} // namespace components

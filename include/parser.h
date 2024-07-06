@@ -1,11 +1,28 @@
-namespace parser {
+// =============================================================================
+// Serial Command Parser
+// =============================================================================
+// License: MIT
+// Author: Yuxuan Zhang (zhangyuxuan@ufl.edu)
+// =============================================================================
+#pragma once
+#include <global.h>
 
-extern struct command_s {
-  char cmd[8], arg[64], val[64];
-} command;
+namespace Parser {
 
-enum state { NONE = 0, UPDATE = 0b01, COMMIT = 0b10 };
+void uTask(void *callback);
+enum ParserState { CMD, ARG, VAL, PANIC };
+class Context {
+protected:
+  enum ParserState state = ParserState::CMD;
+  void *handler;
 
-int uTask();
+public:
+  Stream *port;
+  char cmd[16], arg[64], val[64];
+  Context(Stream *port, void *handler);
+  friend void uTask(void *context);
+};
 
-} // namespace parser
+typedef void (*CommandHandler)(Context *);
+
+} // namespace Parser

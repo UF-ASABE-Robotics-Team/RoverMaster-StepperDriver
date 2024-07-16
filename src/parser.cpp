@@ -21,6 +21,9 @@ void uTask(void *c) {
   // Scan next char from Serial port
   if (Serial.available() > 0) {
     char c = Serial.read();
+#if defined(SERIAL_DOWNSTREAM)
+    SERIAL_DOWNSTREAM.write(c);
+#endif
     if (c >= 'a' && c <= 'z')
       c += 'A' - 'a'; // Convert to upper case
     // Echo back to Serial, useful if you want to directly type commands

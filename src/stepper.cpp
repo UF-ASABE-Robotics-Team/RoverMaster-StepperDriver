@@ -23,34 +23,46 @@ void RESET(Motor *motor) { return; }
 
 void HOME(Motor *motor) {
   auto &state = motor->home_state;
+  // Validate end stop switch
   if (!state.sw->valid()) {
     motor->executor = MotorState::NORMAL;
     return;
   }
+  // State machine
   switch (state.stage) {
-  case HomingStage::FASTFEED:
+  case HomingStage::FAST_FEED:
     if (state.sw->triggered()) {
-      // Initiate backoff sequence
-      state.stage = HomingStage::BACKOFF;
-      state.dir = state.dir == LOW ? HIGH : LOW;
-      cast_assign(motor->home_state.counter,
-                  rint(motor->info.backoff / motor->info.ratio));
+      const long backoff_steps = rint(motor->info.backoff / motor->info.ratio);
+      if (state.counter < backoff_steps) {
+        // If move distance is too short, initiate untangle sequence
+        state.stage = HomingStage::UNTANGLE;
+        cast_assign(state.counter, backoff_steps);
+      } else {
+        // Initiate backoff sequence
+        state.stage = HomingStage::BACKOFF;
+        state.dir = state.dir == LOW ? HIGH : LOW;
+        cast_assign(motor->home_state.counter,
+                    rint(motor->info.backoff / motor->info.ratio));
+      }
     } else {
       motor->step(state.dir);
+      state.counter++;
     }
     break;
-  case HomingStage::SLOWFEED:
-    if (state.sw->triggered()) {
+  case HomingStage::SLOW_FEED:
+    if (state.sw->triggered() || state.sw->sensorless) {
       if (state.sw == &(motor->info.sw1)) {
-        cast_assign(motor->state.range.min,
-                    motor->state.position +
-                        rint(motor->info.margin.left / motor->info.ratio));
+        auto offset = rint(motor->info.margin.left / motor->info.ratio);
+        if (state.sw->sensorless)
+          offset -= rint(motor->info.backoff / motor->info.ratio);
+        cast_assign(motor->state.range.min, motor->state.position + offset);
         motor->state.homed.sw1 = true;
       }
       if (state.sw == &(motor->info.sw2)) {
-        cast_assign(motor->state.range.max,
-                    motor->state.position -
-                        rint(motor->info.margin.right / motor->info.ratio));
+        auto offset = rint(motor->info.margin.right / motor->info.ratio);
+        if (state.sw->sensorless)
+          offset -= rint(motor->info.backoff / motor->info.ratio);
+        cast_assign(motor->state.range.max, motor->state.position - offset);
         motor->state.homed.sw2 = true;
       }
       // Initiate DONE sequence
@@ -67,6 +79,7 @@ void HOME(Motor *motor) {
                  motor->info.origin == HomingOrigin::END) {
         offset = motor->state.range.max;
       }
+      // Adjust reference frame
       motor->state.range.min -= offset;
       motor->state.range.max -= offset;
       motor->state.position -= offset;
@@ -84,13 +97,33 @@ void HOME(Motor *motor) {
     if (state.counter <= 0) {
       // Initiate slow feed sequence
       state.counter = 0;
-      state.stage = HomingStage::SLOWFEED;
+      state.stage = HomingStage::SLOW_FEED;
       state.dir = state.dir == LOW ? HIGH : LOW;
     } else {
       // Backoff <counter> steps after limit switch released
       if (!state.sw->triggered())
         state.counter--;
       motor->step(state.dir);
+    }
+    break;
+  case HomingStage::UNTANGLE:
+    // Untangle sequence, clear DIAG flag from stepper controller.
+    if (state.counter > 0) {
+      motor->step(state.dir);
+      if (--state.counter <= 0)
+        // Reverse untangle direction
+        state.dir = state.dir == LOW ? HIGH : LOW;
+    } else if (state.sw->sensorless && state.sw->triggered()) {
+      double r = (motor->info.sw_dir(state.sw) == state.dir) ? 1.0 : 1.5;
+      // Reload untangle step counter
+      cast_assign(state.counter,
+                  rint(r * motor->info.backoff / motor->info.ratio));
+    } else {
+      // Reload counter, prevent untangle sequence from being triggered again
+      cast_assign(state.counter, rint(motor->info.backoff / motor->info.ratio));
+      // Initiate fast feed sequence
+      state.stage = HomingStage::FAST_FEED;
+      state.dir = motor->info.sw_dir(state.sw);
     }
     break;
   case HomingStage::DONE:
@@ -100,15 +133,15 @@ void HOME(Motor *motor) {
         // Initiate homing for next switch
         state.sw = state.next_sw;
         state.next_sw = NULL;
-        state.stage = HomingStage::FASTFEED;
+        state.stage = HomingStage::FAST_FEED;
         state.dir = motor->info.sw_dir(state.sw);
       } else {
         // Homing complete
         motor->executor = MotorState::NORMAL;
         if (motor->ready()) {
           broadcast("RANGE %s=%f,%f\n", motor->name,
-                 motor->state.range.min * motor->info.ratio,
-                 motor->state.range.max * motor->info.ratio);
+                    motor->state.range.min * motor->info.ratio,
+                    motor->state.range.max * motor->info.ratio);
           broadcast("READY %s\n", motor->name);
         }
       }
@@ -129,7 +162,6 @@ void Motor::step() {
   if (state.position != state.target) {
     const auto dir = state.position < state.target ? HIGH : LOW;
     this->step(dir);
-    global::sig_motion = true;
   }
 }
 
@@ -161,8 +193,9 @@ void Motor::set_speed(double speed /* unit distance per second */,
     this->base_speed = speed;
 }
 
-Motor::Motor(const char *name, const StepperInfo info, double speed)
-    : name(name), info(info) {
+Motor::Motor(const char *name, const StepperInfo info, double speed,
+             Hook after_init)
+    : name(name), info(info), after_init(after_init) {
   reset();
   set_speed(speed, true);
   Scheduler::tasks.push_back(
@@ -176,6 +209,7 @@ void Motor::init() {
     pinMode(info.sw1.pin, INPUT);
   if (info.sw2.valid())
     pinMode(info.sw2.pin, INPUT);
+  after_init.call();
 }
 
 bool Motor::ready() {
@@ -187,10 +221,12 @@ bool Motor::ready() {
 void Motor::home(int direction) {
   this->locked = true;
   this->executor = MotorState::HOME;
-  this->home_state.stage = HomingStage::FASTFEED;
+  this->state.target = this->state.position;
+  this->home_state.stage = HomingStage::FAST_FEED;
   this->home_state.sw = direction <= 0 ? &(this->info.sw1) : &(this->info.sw2);
   this->home_state.next_sw = direction == 0 ? &(this->info.sw2) : NULL;
   this->home_state.dir = this->info.sw_dir(this->home_state.sw);
+  this->home_state.counter = 0;
   this->locked = false;
 }
 
@@ -236,6 +272,9 @@ void uTask(void *p) {
       // Increment position
       const auto dir = digitalRead(m.info.dir_pin);
       m.state.position += (dir == HIGH) ? 1 : -1;
+      // Signal motion if stepper is operation in NORMAL mode
+      if (m.executor == MotorState::NORMAL)
+        global::sig_motion = true;
     } else {
       m.executor(&m);
     }

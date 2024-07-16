@@ -4,13 +4,13 @@
 // License: MIT
 // Author: Yuxuan Zhang (zhangyuxuan@ufl.edu)
 // =============================================================================
-#include <board_pinout.h>
 #include <components.h>
 #include <global.h>
 #include <parser.h>
+#include <pinout.h>
 
 static inline void error_unknown_joint(const Parser::Context &ctx) {
-  printf(ctx.port, "ERROR Executing Command %s: Unknown Joint %s\n", ctx.cmd,
+  printf(*ctx.port, "ERROR Executing Command %s: Unknown Joint %s\n", ctx.cmd,
          ctx.arg);
 }
 
@@ -19,21 +19,23 @@ void global::handleSerialCommand(const Parser::Context *c) {
   const auto &ctx = *c;
   // Commands that can be executed when disabled
   if (strcmp(ctx.cmd, "ENABLE") == 0) {
-    digitalWrite(PIN_STEPPER_ENABLE, LOW);
+    digitalWrite(PIN::STEPPER_ENABLE, LOW);
+    for (auto s : Components::steppers)
+      s->init();
     enabled = true;
-    printf(ctx.port, "INFO  SYSTEM ENABLED\n");
+    printf(*ctx.port, "INFO  SYSTEM ENABLED\n");
   } else if (strcmp(ctx.cmd, "SPEED") == 0) {
     for (auto s : Components::steppers)
       if (strcmp(ctx.arg, s->name) == 0) {
         char *err;
         double val = strtod(ctx.val, &err);
         if (*err != 0) {
-          printf(ctx.port,
+          printf(*ctx.port,
                  "ERROR Parsing Command SPEED for Joint %s: Invalid Value. "
                  "%s\n",
                  s->name, err);
         } else if (val < 0) {
-          printf(ctx.port,
+          printf(*ctx.port,
                  "ERROR Parsing Command SPEED for Joint %s: Negative Value "
                  "(%f)\n",
                  s->name, val);
@@ -44,12 +46,12 @@ void global::handleSerialCommand(const Parser::Context *c) {
       }
     // error_unknown_joint(*ctx);
   } else if (!enabled) {
-    printf(ctx.port, "ERROR SYSTEM DISABLED.\n");
+    printf(*ctx.port, "ERROR SYSTEM DISABLED.\n");
     return;
   } else if (strcmp(ctx.cmd, "DISABLE") == 0) {
-    digitalWrite(PIN_STEPPER_ENABLE, HIGH);
+    digitalWrite(PIN::STEPPER_ENABLE, HIGH);
     enabled = false;
-    printf(ctx.port, "INFO  SYSTEM DISABLED\n");
+    printf(*ctx.port, "INFO  SYSTEM DISABLED\n");
   } else if (strcmp(ctx.cmd, "HOME") == 0) {
     for (auto s : Components::steppers)
       if (strcmp(ctx.arg, s->name) == 0) {
@@ -63,7 +65,7 @@ void global::handleSerialCommand(const Parser::Context *c) {
         char *err;
         double val = strtod(ctx.val, &err);
         if (*err != 0) {
-          printf(ctx.port,
+          printf(*ctx.port,
                  "ERROR Parsing Command SPEED for Joint %s: Invalid Value. "
                  "%s\n",
                  s->name, err);
@@ -74,6 +76,6 @@ void global::handleSerialCommand(const Parser::Context *c) {
       }
     // error_unknown_joint(*ctx);
   } else {
-    printf(ctx.port, "ERROR Unknown Command");
+    printf(*ctx.port, "ERROR Unknown Command");
   }
 }

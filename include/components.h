@@ -11,8 +11,8 @@
 
 namespace Components {
 
-extern const Vector<Stepper::Motor *> steppers;
-
 void init();
+
+extern const Vector<Stepper::Motor *> steppers;
 
 } // namespace components

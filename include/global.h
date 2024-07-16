@@ -35,7 +35,7 @@ extern Vector<Stream *> ports;
 #define printf(port, ...)                                                      \
   {                                                                            \
     snprintf(global::out_buf, sizeof(global::out_buf), __VA_ARGS__);           \
-    (port)->print(global::out_buf);                                            \
+    (port).print(global::out_buf);                                            \
   }
 
 #define broadcast(...)                                                         \

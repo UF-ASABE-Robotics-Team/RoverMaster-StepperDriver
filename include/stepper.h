@@ -4,14 +4,19 @@
 // License: MIT
 // Author: Yuxuan Zhang (zhangyuxuan@ufl.edu)
 // =============================================================================
-#include <global.h>
 #pragma once
+#include <global.h>
+#include <hook.h>
+#include <sys/types.h>
 
 namespace Stepper {
 
 typedef struct EndSwitch_s {
   const int pin; // Switch disabled if pin < 0
   const int trigger;
+  // Sensorless homing mode
+  // Imposes untangle before homing, and skips slow-feed phase.
+  const bool sensorless;
   bool valid() const { return pin >= 0; }
   bool triggered() const { return valid() && (digitalRead(pin) == trigger); }
 } EndSwitch;
@@ -43,10 +48,9 @@ typedef struct StepperInfo_s {
   enum HomingOrigin origin;
 } StepperInfo;
 
-enum HomingStage { FASTFEED, BACKOFF, SLOWFEED, DONE };
+enum HomingStage { FAST_FEED, BACKOFF, SLOW_FEED, DONE, UNTANGLE };
 
 class Motor {
-
 public:
   unsigned long interval;
   double base_speed;
@@ -87,7 +91,9 @@ public:
         // Stepper configuration
         const StepperInfo info,
         // Initial speed of the joint, used for initialize timer
-        double speed = 60.0);
+        double speed = 60.0,
+        // Init hook
+        Hook after_init = Hook());
   void init();
   // Returns true if the motor can be operated.
   bool ready();
@@ -100,6 +106,8 @@ public:
   void reset();
   // Micro task called by uTask
   void (*executor)(Motor *) = NULL;
+  // Hooks for additional configuration
+  Hook after_init;
 };
 
 // Micro Task, called by timer callback at twice the stepping frequency

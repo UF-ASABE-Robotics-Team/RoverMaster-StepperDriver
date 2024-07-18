@@ -13,6 +13,7 @@ namespace global {
 // HardwareSerial port(Serial);
 
 bool sig_motion = false;
+bool echo = false;
 bool enabled = false;
 char in_buf[128];
 char out_buf[128];

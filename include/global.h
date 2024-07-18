@@ -20,6 +20,8 @@ namespace global {
 // extern HardwareSerial port;
 // Enable state across all components
 extern bool enabled;
+// Flag to echo command back to upstream
+extern bool echo;
 // Motion signal, used for synchronization
 extern bool sig_motion;
 // Input buffer for parsing input string
@@ -35,14 +37,7 @@ extern Vector<Stream *> ports;
 #define printf(port, ...)                                                      \
   {                                                                            \
     snprintf(global::out_buf, sizeof(global::out_buf), __VA_ARGS__);           \
-    (port).print(global::out_buf);                                            \
-  }
-
-#define broadcast(...)                                                         \
-  {                                                                            \
-    snprintf(global::out_buf, sizeof(global::out_buf), __VA_ARGS__);           \
-    for (auto &port : global::ports)                                           \
-      port->print(global::out_buf);                                            \
+    (port).print(global::out_buf);                                             \
   }
 
 #define cast_assign(var, val) var = static_cast<decltype(var)>(val)

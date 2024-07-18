@@ -19,15 +19,6 @@ void sync(void *) {
   }
 }
 
-void waitKey(const char *msg = nullptr) {
-  if (msg)
-    Serial.print(msg);
-  while (!Serial.available())
-    ;
-  while (Serial.available())
-    Serial.read();
-}
-
 #if defined(SERIAL_DOWNSTREAM)
 static const unsigned long serial_forward_interval = 1000; // 1ms
 void serial_forward(void *) {
@@ -46,18 +37,17 @@ void serial_forward(void *) {
 #endif
 
 void setup() {
-  Serial.begin(115200);
   Components::init();
   for (auto s : Components::steppers)
     s->init();
-  static const unsigned long parser_interval = 100; // 0.1ms
-  static const unsigned long sync_interval = 1000;  // 1ms
+  static const unsigned long parser_interval = 1000; // 1ms
+  static const unsigned long sync_interval = 10000;  // 10ms
   Scheduler::tasks.push_back(new Scheduler::Task(
       Parser::uTask,
-      (void *)new Parser::Context(&Serial, (void *)global::handleSerialCommand),
+      (void *)new Parser::Context((void *)global::handleSerialCommand),
       &parser_interval));
   Scheduler::tasks.push_back(
-      new Scheduler::Task(sync, &Serial, &sync_interval));
+      new Scheduler::Task(sync, &SERIAL_UPSTREAM, &sync_interval));
 #ifdef SERIAL_DOWNSTREAM
   Scheduler::tasks.push_back(
       new Scheduler::Task(serial_forward, nullptr, &serial_forward_interval));

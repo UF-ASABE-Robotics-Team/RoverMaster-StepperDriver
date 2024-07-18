@@ -17,9 +17,8 @@ protected:
   void *handler;
 
 public:
-  Stream *port;
   char cmd[16], arg[64], val[64];
-  Context(Stream *port, void *handler);
+  Context(void *handler);
   friend void uTask(void *context);
 };
 

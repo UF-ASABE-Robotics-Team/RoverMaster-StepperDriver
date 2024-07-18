@@ -35,6 +35,8 @@ void tick() {
   last = now;
   // Update schedule timetable & Find the most urgent overdue task
   for (auto &task : tasks) {
+    if ((*task->period) == 0)
+      continue;
     task->wait_time += delta_t;
     if (task->wait_time >= *task->period) {
       const auto task_overdue_time = task->wait_time - *task->period;

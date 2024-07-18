@@ -6,10 +6,11 @@
 // =============================================================================
 #include <global.h>
 #include <parser.h>
+#include <pinout.h>
 
 namespace Parser {
 
-Context::Context(Stream *port, void *handler) : handler(handler), port(port) {
+Context::Context(void *handler) : handler(handler) {
   this->state = ParserState::CMD;
   memset(cmd, 0, sizeof(cmd) + sizeof(arg) + sizeof(val));
 };
@@ -19,15 +20,17 @@ void uTask(void *c) {
   auto handle = reinterpret_cast<CommandHandler>(context.handler);
   static char *p = context.cmd;
   // Scan next char from Serial port
-  if (Serial.available() > 0) {
-    char c = Serial.read();
+  if (SERIAL_UPSTREAM.available() > 0) {
+    char c = SERIAL_UPSTREAM.read();
+    if (c >= 'a' && c <= 'z')
+      c += 'A' - 'a'; // Convert to upper case
+#if defined(BOARD_A)
+    if (global::echo)
+      SERIAL_UPSTREAM.write(c);
+#endif
 #if defined(SERIAL_DOWNSTREAM)
     SERIAL_DOWNSTREAM.write(c);
 #endif
-    if (c >= 'a' && c <= 'z')
-      c += 'A' - 'a'; // Convert to upper case
-    // Echo back to Serial, useful if you want to directly type commands
-    Serial.write(c);
     const bool is_separator = c == ' ' || c == '\t',
                is_assignment = c == '=' || c == ':',
                is_line_feed = c == '\n' || c == '\r';

@@ -1,9 +1,10 @@
+#include "pinout.h"
 #include <TMC2209.h>
 #include <TMCStepper.h>
 
 void config(void *context) {
   if (!context) {
-    Serial.println("ERROR TMC2209 config() called with nullptr");
+    SERIAL_UPSTREAM.println("ERROR TMC2209 config() called with nullptr");
     return;
   }
   const auto &config = *reinterpret_cast<TMC2209::Config *>(context);

@@ -4,13 +4,14 @@
 // License: MIT
 // Author: Yuxuan Zhang (zhangyuxuan@ufl.edu)
 // =============================================================================
+#include "esp32-hal-gpio.h"
 #include <Arduino.h>
 #include <unistd.h>
 
-#include "global.h"
-#include "io_pin_remap.h"
-#include "scheduler.h"
-#include "stepper.h"
+#include <global.h>
+#include <pinout.h>
+#include <scheduler.h>
+#include <stepper.h>
 
 namespace MotorState {
 using namespace Stepper;
@@ -65,25 +66,24 @@ void HOME(Motor *motor) {
         cast_assign(motor->state.range.max, motor->state.position - offset);
         motor->state.homed.sw2 = true;
       }
-      // Initiate DONE sequence
-      state.stage = HomingStage::DONE;
       // Find new origin on this axis
-      long offset;
+      long offset = rint(motor->info.margin.offset / motor->info.ratio);
       if (motor->state.homed.sw1 && motor->state.homed.sw2 &&
           motor->info.origin == HomingOrigin::MIDDLE) {
-        offset = (motor->state.range.max + motor->state.range.min) / 2;
+        offset += (motor->state.range.max + motor->state.range.min) / 2;
       } else if ((motor->state.homed.sw1 && !motor->state.homed.sw1) ||
                  motor->info.origin == HomingOrigin::START) {
-        offset = motor->state.range.min;
+        offset += motor->state.range.min;
       } else if ((motor->state.homed.sw2 && !motor->state.homed.sw2) ||
                  motor->info.origin == HomingOrigin::END) {
-        offset = motor->state.range.max;
+        offset += motor->state.range.max;
       }
       // Adjust reference frame
       motor->state.range.min -= offset;
       motor->state.range.max -= offset;
       motor->state.position -= offset;
-      motor->state.target = 0;
+      // Initiate DONE sequence
+      state.stage = HomingStage::DONE;
     } else {
       if (state.counter < 4)
         state.counter++;
@@ -128,25 +128,26 @@ void HOME(Motor *motor) {
     break;
   case HomingStage::DONE:
   default:
-    if (motor->state.position == motor->state.target) {
-      if (state.next_sw != NULL && state.next_sw->valid()) {
-        // Initiate homing for next switch
-        state.sw = state.next_sw;
-        state.next_sw = NULL;
-        state.stage = HomingStage::FAST_FEED;
-        state.dir = motor->info.sw_dir(state.sw);
-      } else {
-        // Homing complete
-        motor->executor = MotorState::NORMAL;
-        if (motor->ready()) {
-          broadcast("RANGE %s=%f,%f\n", motor->name,
-                    motor->state.range.min * motor->info.ratio,
-                    motor->state.range.max * motor->info.ratio);
-          broadcast("READY %s\n", motor->name);
-        }
-      }
+    if (state.next_sw != NULL && state.next_sw->valid()) {
+      // Initiate homing for next switch
+      state.sw = state.next_sw;
+      state.next_sw = NULL;
+      state.stage = HomingStage::FAST_FEED;
+      state.dir = motor->info.sw_dir(state.sw);
     } else {
-      motor->step();
+      motor->executor = MotorState::NORMAL;
+      // Homing complete
+      if (motor->ready()) {
+        printf(SERIAL_UPSTREAM, "RANGE %s=%f,%f\n", motor->name,
+               motor->state.range.min * motor->info.ratio,
+               motor->state.range.max * motor->info.ratio);
+        printf(SERIAL_UPSTREAM, "READY %s\n", motor->name);
+        // Move to zero position
+        motor->state.target = 0;
+      } else {
+        // Stand still, wait for other motors to complete homing
+        motor->state.target = motor->state.position;
+      }
     }
   }
 }
@@ -175,29 +176,29 @@ void Motor::step(int direction) {
     usleep(1);
   }
   digitalWrite(this->info.step_pin, HIGH);
-  this->state.falling_edge = true;
 }
 
 void Motor::set_speed(double speed /* unit distance per second */,
                       bool change_base) {
-  // Steps per second
-  auto freq = speed / info.ratio;
-  // Prevent near-zero speed
-  if (freq < 1e-6)
-    freq = 1e-6;
-  // Update timer interval
-  // Double the frequency, half used for triggering falling edge.
-  cast_assign(this->interval, rint(1e6 / (2 * freq)));
+  if (speed != 0) { // Steps per second
+    auto freq = abs(speed) / info.ratio;
+    // Prevent near-zero speed
+    if (freq < 1e-6)
+      freq = 1e-6;
+    // Update timer interval
+    // Double the frequency, half used for triggering falling edge.
+    cast_assign(this->interval, rint(1e6 / (2 * freq)));
+  } else {
+    this->interval = 0;
+  }
   // Check if base speed needs to be updated
   if (change_base)
     this->base_speed = speed;
 }
 
-Motor::Motor(const char *name, const StepperInfo info, double speed,
-             Hook after_init)
+Motor::Motor(const char *name, const StepperInfo info, Hook after_init)
     : name(name), info(info), after_init(after_init) {
   reset();
-  set_speed(speed, true);
   Scheduler::tasks.push_back(
       new Scheduler::Task(uTask, this, &(this->interval)));
 }
@@ -209,17 +210,17 @@ void Motor::init() {
     pinMode(info.sw1.pin, INPUT);
   if (info.sw2.valid())
     pinMode(info.sw2.pin, INPUT);
+  this->set_speed(0);
   after_init.call();
 }
 
 bool Motor::ready() {
   return this->executor == MotorState::NORMAL &&
-         (!this->info.sw1.valid() || this->state.homed.sw1) &&
-         (!this->info.sw2.valid() || this->state.homed.sw2);
+         ((!this->info.sw1.valid()) || this->state.homed.sw1) &&
+         ((!this->info.sw2.valid()) || this->state.homed.sw2);
 }
 
 void Motor::home(int direction) {
-  this->locked = true;
   this->executor = MotorState::HOME;
   this->state.target = this->state.position;
   this->home_state.stage = HomingStage::FAST_FEED;
@@ -227,12 +228,12 @@ void Motor::home(int direction) {
   this->home_state.next_sw = direction == 0 ? &(this->info.sw2) : NULL;
   this->home_state.dir = this->info.sw_dir(this->home_state.sw);
   this->home_state.counter = 0;
-  this->locked = false;
+  this->set_speed(this->info.speed);
 }
 
 void Motor::move(double pos) {
-  this->locked = true;
   if (ready()) {
+    this->set_speed(this->base_speed);
     auto target =
         static_cast<decltype(this->state.target)>(rint(pos / info.ratio));
     if (this->info.margin.enforce) {
@@ -245,39 +246,34 @@ void Motor::move(double pos) {
     this->state.target = target;
     this->executor = MotorState::NORMAL;
   } else {
-    broadcast("ERROR Motor %s not in NORMAL state\n", name);
+    printf(SERIAL_UPSTREAM, "ERROR Motor %s not in NORMAL state\n", name);
   }
-  this->locked = false;
 }
 
 void Motor::reset() {
-  this->locked = true;
-  this->state = {.falling_edge = false,
-                 .position = 0,
-                 .target = 0,
-                 .range = {0, 0},
-                 .homed = {false, false}};
+  this->state = {
+      .position = 0, .target = 0, .range = {0, 0}, .homed = {false, false}};
   executor = MotorState::RESET;
-  this->locked = false;
 }
 
 // Called by timer interrupt
 void uTask(void *p) {
   auto &m = *static_cast<Motor *>(p);
-  if (!m.locked) {
-    if (m.state.falling_edge) {
-      // Execute falling edge
-      digitalWrite(m.info.step_pin, LOW);
-      m.state.falling_edge = false;
-      // Increment position
-      const auto dir = digitalRead(m.info.dir_pin);
-      m.state.position += (dir == HIGH) ? 1 : -1;
-      // Signal motion if stepper is operation in NORMAL mode
-      if (m.executor == MotorState::NORMAL)
-        global::sig_motion = true;
-    } else {
-      m.executor(&m);
+  if (digitalRead(m.info.step_pin) == HIGH) {
+    // Execute falling edge
+    digitalWrite(m.info.step_pin, LOW);
+    // Increment position
+    const auto dir = digitalRead(m.info.dir_pin);
+    m.state.position += (dir == HIGH) ? 1 : -1;
+    // Signal motion if stepper is operation in NORMAL mode
+    if (m.executor == MotorState::NORMAL) {
+      global::sig_motion = true;
+      // Check if target position is reached
+      if (m.state.position == m.state.target)
+        m.set_speed(0);
     }
+  } else {
+    m.executor(&m);
   }
 }
 
